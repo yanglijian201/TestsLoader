@@ -12,7 +12,6 @@ const DEFAULT_DOCX_PATH = "/default.docx";
 
 const QUESTION_RE = /^(\d+)[.,、]\s*(.*)$/;
 const OPTION_RE = /^([A-F])[.,、]\s*(.*)$/i;
-const ANSWER_RE = /^Answer[:\s]+([A-F]+)$/i;
 
 function readJsonStorage(key, fallback) {
   try {
@@ -33,6 +32,27 @@ function clamp(num, min, max) {
 
 function normalizeText(text) {
   return (text || "").replace(/\u00a0/g, " ").trim();
+}
+
+function extractAnswerLetters(text) {
+  const normalized = normalizeText(text);
+  const answerIndex = normalized.toLowerCase().lastIndexOf("answer");
+  if (answerIndex < 0) {
+    return null;
+  }
+
+  const answerTail = normalized.slice(answerIndex);
+  const match = answerTail.match(/^Answer[:\s]*([A-Z,\s]+)$/i);
+  if (!match) {
+    return null;
+  }
+
+  const letters = (match[1].toUpperCase().match(/[A-F]/g) || []).join("");
+  return letters || null;
+}
+
+function stripInlineAnswer(text) {
+  return normalizeText(text).replace(/Answer[:\s]*[A-Z,\s]+$/i, "").trim();
 }
 
 function appendUniqueImages(target, images) {
@@ -113,13 +133,22 @@ function parseQuestionsFromHtml(html) {
   let currentAnswer = null;
 
   function flushCurrentQuestion() {
-    if (currentNumber !== null && Object.keys(currentOptions).length > 0 && currentAnswer) {
+    if (currentNumber !== null) {
+      const hasOptions = Object.keys(currentOptions).length > 0;
+      const normalizedAnswer = currentAnswer ? currentAnswer.toUpperCase().split("").sort().join("") : "";
+      const canSubmit = hasOptions && normalizedAnswer.length > 0;
+
+      if (!currentText.trim() && !hasOptions && currentImages.length === 0) {
+        return;
+      }
+
       questions.push({
         number: currentNumber,
         text: currentText.trim(),
         options: { ...currentOptions },
-        answer: currentAnswer.toUpperCase().split("").sort().join(""),
-        images: [...currentImages]
+        answer: normalizedAnswer,
+        images: [...currentImages],
+        canSubmit
       });
     }
   }
@@ -130,8 +159,23 @@ function parseQuestionsFromHtml(html) {
 
     const qMatch = text.match(QUESTION_RE);
     if (qMatch) {
+      const candidateNumber = Number(qMatch[1]);
+      // Some stems contain numbered lists (for example: "1. ...", "2. ...")
+      // before options. Keep the first detected question number in this case.
+      const hasActiveQuestion = currentNumber !== null;
+      const hasOptions = Object.keys(currentOptions).length > 0;
+      const hasAnswer = Boolean(currentAnswer);
+
+      // Keep ordered-list lines like "1. xxx" inside the stem, but do not
+      // swallow a real next question number such as 77 after 76.
+      if (hasActiveQuestion && !hasOptions && !hasAnswer && candidateNumber <= currentNumber) {
+        appendUniqueImages(currentImages, images);
+        currentText = currentText ? `${currentText}\n${text}` : text;
+        continue;
+      }
+
       flushCurrentQuestion();
-      currentNumber = Number(qMatch[1]);
+      currentNumber = candidateNumber;
       currentText = qMatch[2] || "";
       currentOptions = {};
       currentImages = [];
@@ -140,17 +184,16 @@ function parseQuestionsFromHtml(html) {
       continue;
     }
 
+    const answerLetters = extractAnswerLetters(text);
+    if (answerLetters) {
+      currentAnswer = answerLetters;
+    }
+
     const optionMatch = text.match(OPTION_RE);
     if (optionMatch) {
       const letter = optionMatch[1].toUpperCase();
-      currentOptions[letter] = optionMatch[2] || "";
+      currentOptions[letter] = stripInlineAnswer(optionMatch[2] || "");
       appendUniqueImages(currentImages, images);
-      continue;
-    }
-
-    const answerMatch = text.match(ANSWER_RE);
-    if (answerMatch) {
-      currentAnswer = answerMatch[1].toUpperCase();
       continue;
     }
 
@@ -197,12 +240,14 @@ function prepareQuestion(question) {
   });
 
   const shuffledAnswer = sortLetters(
-    question.answer.split("").map((letter) => reverseMapping[letter]).filter(Boolean)
+    (question.answer || "").split("").map((letter) => reverseMapping[letter]).filter(Boolean)
   ).join("");
+  const canSubmit = Boolean(question.canSubmit && shuffledItems.length > 0 && shuffledAnswer.length > 0);
 
   return {
     ...question,
-    isMultipleChoice: question.answer.length > 1,
+    canSubmit,
+    isMultipleChoice: canSubmit && question.answer.length > 1,
     shuffledOptions,
     optionMapping,
     reverseMapping,
@@ -475,6 +520,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showWrongModal, setShowWrongModal] = useState(false);
   const [showFinalModal, setShowFinalModal] = useState(false);
+  const [isDocxDropActive, setIsDocxDropActive] = useState(false);
 
   const [settings, setSettings] = useState({
     mode: "random",
@@ -488,12 +534,16 @@ export default function App() {
   const sortedQuestions = useMemo(() => [...questions].sort((a, b) => a.number - b.number), [questions]);
   const maxQuestionNumber = sortedQuestions.length > 0 ? sortedQuestions[sortedQuestions.length - 1].number : 0;
   const answeredCount = Object.keys(answersState).length;
+  const gradableCount = useMemo(
+    () => quizQuestions.reduce((count, question) => count + (question.canSubmit ? 1 : 0), 0),
+    [quizQuestions]
+  );
 
   const currentQuestion = quizQuestions[currentIndex] || null;
   const currentResult = answersState[currentIndex] || null;
   const currentSelected = draftSelections[currentIndex] || currentResult?.selected || [];
 
-  const progressPercent = quizQuestions.length > 0 ? Math.round((answeredCount / quizQuestions.length) * 100) : 0;
+  const progressPercent = gradableCount > 0 ? Math.round((answeredCount / gradableCount) * 100) : 0;
 
   useEffect(() => {
     window.localStorage.setItem(FONT_STORAGE_KEY, JSON.stringify({ font_size: fontSize }));
@@ -504,10 +554,10 @@ export default function App() {
   }, [wrongAnswers]);
 
   useEffect(() => {
-    if (quizQuestions.length > 0 && answeredCount === quizQuestions.length) {
+    if (gradableCount > 0 && answeredCount === gradableCount) {
       setShowFinalModal(true);
     }
-  }, [answeredCount, quizQuestions.length]);
+  }, [answeredCount, gradableCount]);
 
   useEffect(
     () => () => {
@@ -645,6 +695,44 @@ export default function App() {
     event.target.value = "";
   }
 
+  function handleDocxDragEnter(event) {
+    event.preventDefault();
+    if (!loading) {
+      setIsDocxDropActive(true);
+    }
+  }
+
+  function handleDocxDragOver(event) {
+    event.preventDefault();
+    if (loading) {
+      return;
+    }
+    event.dataTransfer.dropEffect = "copy";
+    if (!isDocxDropActive) {
+      setIsDocxDropActive(true);
+    }
+  }
+
+  function handleDocxDragLeave(event) {
+    event.preventDefault();
+    if (!event.currentTarget.contains(event.relatedTarget)) {
+      setIsDocxDropActive(false);
+    }
+  }
+
+  async function handleDocxDrop(event) {
+    event.preventDefault();
+    setIsDocxDropActive(false);
+    if (loading) {
+      return;
+    }
+    const file = event.dataTransfer.files?.[0];
+    if (!file) {
+      return;
+    }
+    await loadDocxFile(file);
+  }
+
   function startQuiz() {
     if (questions.length === 0) {
       return;
@@ -678,7 +766,7 @@ export default function App() {
   }
 
   function changeOption(letter, checked) {
-    if (!currentQuestion || currentResult) {
+    if (!currentQuestion || currentResult || !currentQuestion.canSubmit) {
       return;
     }
 
@@ -707,6 +795,11 @@ export default function App() {
 
   function submitAnswer() {
     if (!currentQuestion || currentResult) {
+      return;
+    }
+
+    if (!currentQuestion.canSubmit) {
+      setWarning("该题暂无可提交答案，请使用“上一题/下一题”继续。");
       return;
     }
 
@@ -773,12 +866,18 @@ export default function App() {
   }
 
   const questionTypeLabel = currentQuestion
-    ? currentQuestion.isMultipleChoice
-      ? `【多选题 - 请选择 ${currentQuestion.answer.length} 个答案】`
-      : "【单选题】"
+    ? currentQuestion.canSubmit
+      ? currentQuestion.isMultipleChoice
+        ? `【多选题 - 请选择 ${currentQuestion.answer.length} 个答案】`
+        : "【单选题】"
+      : "【拖拽题 / 无标准答案，仅浏览】"
     : "";
 
-  const typeClass = currentQuestion?.isMultipleChoice ? "type-multi" : "type-single";
+  const typeClass = currentQuestion?.canSubmit
+    ? currentQuestion.isMultipleChoice
+      ? "type-multi"
+      : "type-single"
+    : "type-info";
 
   const resultText = currentResult
     ? currentResult.isCorrect
@@ -791,7 +890,7 @@ export default function App() {
       <input ref={fileInputRef} type="file" accept=".docx" onChange={handleFileUpload} disabled={loading} style={{ display: "none" }} />
       <header className="top-panel card">
         <div className="stats-grid">
-          <div>进度: {answeredCount}/{quizQuestions.length || 0}</div>
+          <div>进度: {answeredCount}/{gradableCount || 0}</div>
           <div>得分: {answeredCount > 0 ? `${score}/${answeredCount}` : "0"}</div>
           <div>错题本: {wrongAnswers.length} 题</div>
           <div className="source-file">题库文件: {sourceFileName || "未加载"}</div>
@@ -816,8 +915,17 @@ export default function App() {
           <button type="button" className="secondary" onClick={restartQuiz} disabled={questions.length === 0}>
             重新开始
           </button>
-          <button type="button" className="secondary" onClick={openFilePicker} disabled={loading}>
-            更换 DOCX
+          <button
+            type="button"
+            className={`secondary docx-drop-target ${isDocxDropActive ? "dragging" : ""}`}
+            onClick={openFilePicker}
+            onDragEnter={handleDocxDragEnter}
+            onDragOver={handleDocxDragOver}
+            onDragLeave={handleDocxDragLeave}
+            onDrop={handleDocxDrop}
+            disabled={loading}
+          >
+            {isDocxDropActive ? "释放以上传 DOCX" : "更换 DOCX"}
           </button>
           <button type="button" className="secondary" onClick={() => setShowWrongModal(true)}>
             查看错题
@@ -864,6 +972,10 @@ export default function App() {
               ))}
           </div>
 
+          {!currentQuestion.canSubmit ? (
+            <div className="info-text">该题暂无可判分答案，请使用“上一题/下一题”继续。</div>
+          ) : null}
+
           {warning ? <div className="warning-text">{warning}</div> : null}
 
           {currentResult ? (
@@ -883,7 +995,12 @@ export default function App() {
               上一题
             </button>
 
-            <button type="button" className="primary" onClick={submitAnswer} disabled={Boolean(currentResult)}>
+            <button
+              type="button"
+              className="primary"
+              onClick={submitAnswer}
+              disabled={Boolean(currentResult) || !currentQuestion.canSubmit}
+            >
               提交答案
             </button>
 
@@ -923,7 +1040,7 @@ export default function App() {
 
       <FinalResultModal
         visible={showFinalModal}
-        total={quizQuestions.length}
+        total={gradableCount}
         score={score}
         wrongCount={wrongAnswers.length}
         onClose={() => setShowFinalModal(false)}

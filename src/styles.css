@@ -127,6 +127,16 @@ input[type="text"] {
   border-color: var(--border);
 }
 
+.docx-drop-target {
+  transition: border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease;
+}
+
+.docx-drop-target.dragging {
+  border-color: var(--accent);
+  background: #e8f3ff;
+  color: var(--accent-strong);
+}
+
 .danger {
   background: #ffeef1;
   color: var(--danger);
@@ -230,6 +240,10 @@ input[type="text"] {
   color: var(--danger);
 }
 
+.type-info {
+  color: var(--text-muted);
+}
+
 .question-text {
   margin: 0;
   font-size: calc(var(--base-size) * 1.02px);
@@ -290,6 +304,15 @@ input[type="text"] {
   color: #b06a00;
   background: #fff5e6;
   border: 1px solid #ffdcb0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: calc(var(--base-size) * 0.82px);
+}
+
+.info-text {
+  color: var(--text-main);
+  background: #eef4fb;
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 12px;
   font-size: calc(var(--base-size) * 0.82px);
