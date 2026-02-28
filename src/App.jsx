@@ -8,7 +8,6 @@ const DEFAULT_FONT_SIZE = 20;
 const MIN_FONT_SIZE = 12;
 const MAX_FONT_SIZE = 32;
 const LETTERS = ["A", "B", "C", "D", "E", "F"];
-const DEFAULT_DOCX_PATH = "/default.docx";
 
 const QUESTION_RE = /^(\d+)[.,、]\s*(.*)$/;
 const OPTION_RE = /^([A-F])[.,、]\s*(.*)$/i;
@@ -275,6 +274,21 @@ function computeSequentialMaxCount(sortedQuestions, startNumber) {
   return Math.max(1, sortedQuestions.length - startIdx);
 }
 
+function resolveDocxPathFromRoute(pathname) {
+  const rawPath = (pathname || "").trim();
+  if (!rawPath) {
+    return null;
+  }
+
+  const noTrailingSlash = rawPath.replace(/\/+$/, "");
+  if (!noTrailingSlash || noTrailingSlash === "/") {
+    return null;
+  }
+
+  const normalizedPath = noTrailingSlash.startsWith("/") ? noTrailingSlash : `/${noTrailingSlash}`;
+  return normalizedPath.toLowerCase().endsWith(".docx") ? normalizedPath : `${normalizedPath}.docx`;
+}
+
 function OptionItem({ questionType, letter, text, checked, disabled, onChange, fontSize }) {
   return (
     <label className={`option-card ${checked ? "selected" : ""} ${disabled ? "disabled" : ""}`}>
@@ -529,6 +543,14 @@ export default function App() {
   });
 
   const fileInputRef = useRef(null);
+  const routeDocxPath = useMemo(() => resolveDocxPathFromRoute(window.location.pathname), []);
+  const routeDocxFileName = useMemo(() => {
+    if (!routeDocxPath) {
+      return "";
+    }
+    const segments = routeDocxPath.split("/").filter(Boolean);
+    return segments[segments.length - 1] || "";
+  }, [routeDocxPath]);
 
   const sortedQuestions = useMemo(() => [...questions].sort((a, b) => a.number - b.number), [questions]);
   const maxQuestionNumber = sortedQuestions.length > 0 ? sortedQuestions[sortedQuestions.length - 1].number : 0;
@@ -560,23 +582,33 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
+    if (!routeDocxPath) {
+      return () => {
+        cancelled = true;
+      };
+    }
 
-    async function tryLoadDefaultDocx() {
+    async function tryLoadDocxFromRoute() {
       setLoading(true);
       setLoadError("");
 
       try {
-        const response = await fetch(DEFAULT_DOCX_PATH, { cache: "no-store" });
-        if (!response.ok || cancelled) {
+        const response = await fetch(routeDocxPath, { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error(`未找到题库文件 ${routeDocxPath}，请上传或拖拽本地 DOCX。`);
+        }
+        if (cancelled) {
           return;
         }
         const arrayBuffer = await response.arrayBuffer();
         if (cancelled) {
           return;
         }
-        await loadDocxArrayBuffer(arrayBuffer, "default.docx");
-      } catch {
-        // Ignore missing or unreachable default file.
+        await loadDocxArrayBuffer(arrayBuffer, routeDocxFileName || routeDocxPath.replace(/^\//, ""));
+      } catch (error) {
+        if (!cancelled) {
+          setLoadError(error instanceof Error ? error.message : "自动加载题库失败，请上传或拖拽本地 DOCX。");
+        }
       } finally {
         if (!cancelled) {
           setLoading(false);
@@ -584,11 +616,11 @@ export default function App() {
       }
     }
 
-    tryLoadDefaultDocx();
+    tryLoadDocxFromRoute();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [routeDocxFileName, routeDocxPath]);
 
   function resetRunState() {
     setCurrentIndex(0);
@@ -907,7 +939,7 @@ export default function App() {
             onDrop={handleDocxDrop}
             disabled={loading}
           >
-            {isDocxDropActive ? "释放以上传 DOCX" : "更换 DOCX"}
+            {isDocxDropActive ? "释放以上传 DOCX" : questions.length > 0 ? "更换 DOCX" : "选择 DOCX"}
           </button>
           <button type="button" className="secondary" onClick={() => setShowWrongModal(true)}>
             查看错题
@@ -919,6 +951,29 @@ export default function App() {
         </div>
         {loadError ? <p className="error-text">{loadError}</p> : null}
       </header>
+
+      {questions.length === 0 ? (
+        <section className="card loader-card">
+          <h1>{loading ? "正在加载题库..." : "加载题库"}</h1>
+          <p>
+            {routeDocxPath
+              ? `当前路径将尝试自动加载 ${routeDocxPath}。如果加载失败，请手动上传。`
+              : "访问 /default 可自动加载 default.docx；也可直接上传或拖拽本地 DOCX 文件。"}
+          </p>
+          <div
+            className={`upload-zone ${isDocxDropActive ? "dragging" : ""}`}
+            onDragEnter={handleDocxDragEnter}
+            onDragOver={handleDocxDragOver}
+            onDragLeave={handleDocxDragLeave}
+            onDrop={handleDocxDrop}
+          >
+            <button type="button" className="upload-btn" onClick={openFilePicker} disabled={loading}>
+              {loading ? "加载中..." : "选择 DOCX 文件"}
+            </button>
+            <p className="drag-tip">也可以将 .docx 文件拖到这里。</p>
+          </div>
+        </section>
+      ) : null}
 
       {quizQuestions.length > 0 && currentQuestion ? (
         <section className="card question-card">

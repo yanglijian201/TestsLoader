@@ -31,6 +31,11 @@ npm run dev
 3. Open the URL shown by Vite (usually `http://localhost:5173`).
 4. Upload your `.docx` question bank and start practicing.
 
+Route-based auto load:
+
+- Visit `/` to open the upload page (no automatic DOCX load).
+- Visit `/<name>` to auto-load `/<name>.docx` (for example, `/default` loads `/default.docx`).
+
 ## Build for production
 
 ```bash
