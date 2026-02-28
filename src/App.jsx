@@ -471,7 +471,6 @@ export default function App() {
 
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
-  const [isDragging, setIsDragging] = useState(false);
 
   const [showSettings, setShowSettings] = useState(false);
   const [showWrongModal, setShowWrongModal] = useState(false);
@@ -484,7 +483,6 @@ export default function App() {
   });
 
   const autoNextTimerRef = useRef(null);
-  const dragDepthRef = useRef(0);
   const fileInputRef = useRef(null);
 
   const sortedQuestions = useMemo(() => [...questions].sort((a, b) => a.number - b.number), [questions]);
@@ -542,8 +540,6 @@ export default function App() {
       } finally {
         if (!cancelled) {
           setLoading(false);
-          dragDepthRef.current = 0;
-          setIsDragging(false);
         }
       }
     }
@@ -630,8 +626,6 @@ export default function App() {
       setLoadError(error instanceof Error ? error.message : "解析题库失败。");
     } finally {
       setLoading(false);
-      dragDepthRef.current = 0;
-      setIsDragging(false);
     }
   }
 
@@ -649,41 +643,6 @@ export default function App() {
     }
     await loadDocxFile(file);
     event.target.value = "";
-  }
-
-  function handleDragOver(event) {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "copy";
-    if (!isDragging) {
-      setIsDragging(true);
-    }
-  }
-
-  function handleDragEnter(event) {
-    event.preventDefault();
-    dragDepthRef.current += 1;
-    if (!isDragging) {
-      setIsDragging(true);
-    }
-  }
-
-  function handleDragLeave(event) {
-    event.preventDefault();
-    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
-    if (dragDepthRef.current === 0) {
-      setIsDragging(false);
-    }
-  }
-
-  async function handleDrop(event) {
-    event.preventDefault();
-    dragDepthRef.current = 0;
-    setIsDragging(false);
-    const file = event.dataTransfer.files?.[0];
-    if (!file) {
-      return;
-    }
-    await loadDocxFile(file);
   }
 
   function startQuiz() {
@@ -829,6 +788,7 @@ export default function App() {
 
   return (
     <div className="app-shell" style={{ "--base-size": fontSize }}>
+      <input ref={fileInputRef} type="file" accept=".docx" onChange={handleFileUpload} disabled={loading} style={{ display: "none" }} />
       <header className="top-panel card">
         <div className="stats-grid">
           <div>进度: {answeredCount}/{quizQuestions.length || 0}</div>
@@ -867,26 +827,8 @@ export default function App() {
         <div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent}>
           <div className="progress-fill" style={{ width: `${progressPercent}%` }} />
         </div>
-      </header>
-
-      <section className="card loader-card">
-        <h1>CCDE 题库练习 (React Web)</h1>
-        <p>上传 `.docx` 题库后即可开始练习，支持 iPhone 和 Mac 浏览器。</p>
-        <input ref={fileInputRef} type="file" accept=".docx" onChange={handleFileUpload} disabled={loading} style={{ display: "none" }} />
-        <div
-          className={`upload-zone ${isDragging ? "dragging" : ""}`}
-          onDragOver={handleDragOver}
-          onDragEnter={handleDragEnter}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-        >
-          <button type="button" className="upload-btn" onClick={openFilePicker} disabled={loading}>
-            {loading ? "正在解析题库..." : "选择题库 DOCX"}
-          </button>
-          <p className="drag-tip">或将 .docx 文件拖拽到这里</p>
-        </div>
         {loadError ? <p className="error-text">{loadError}</p> : null}
-      </section>
+      </header>
 
       {quizQuestions.length > 0 && currentQuestion ? (
         <section className="card question-card">
