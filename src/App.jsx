@@ -528,7 +528,6 @@ export default function App() {
     startQuestion: 1
   });
 
-  const autoNextTimerRef = useRef(null);
   const fileInputRef = useRef(null);
 
   const sortedQuestions = useMemo(() => [...questions].sort((a, b) => a.number - b.number), [questions]);
@@ -558,15 +557,6 @@ export default function App() {
       setShowFinalModal(true);
     }
   }, [answeredCount, gradableCount]);
-
-  useEffect(
-    () => () => {
-      if (autoNextTimerRef.current) {
-        clearTimeout(autoNextTimerRef.current);
-      }
-    },
-    []
-  );
 
   useEffect(() => {
     let cancelled = false;
@@ -840,14 +830,6 @@ export default function App() {
 
     setWarning("");
 
-    if (isCorrect && currentIndex < quizQuestions.length - 1) {
-      if (autoNextTimerRef.current) {
-        clearTimeout(autoNextTimerRef.current);
-      }
-      autoNextTimerRef.current = setTimeout(() => {
-        setCurrentIndex((prev) => Math.min(prev + 1, quizQuestions.length - 1));
-      }, 500);
-    }
   }
 
   function clearWrongAnswers() {
