@@ -8,6 +8,7 @@ const DEFAULT_FONT_SIZE = 20;
 const MIN_FONT_SIZE = 12;
 const MAX_FONT_SIZE = 32;
 const LETTERS = ["A", "B", "C", "D", "E", "F"];
+const DEFAULT_DOCX_PATH = "/default.docx";
 
 const QUESTION_RE = /^(\d+)[.,、]\s*(.*)$/;
 const OPTION_RE = /^([A-F])[.,、]\s*(.*)$/i;
@@ -484,6 +485,7 @@ export default function App() {
 
   const autoNextTimerRef = useRef(null);
   const dragDepthRef = useRef(0);
+  const fileInputRef = useRef(null);
 
   const sortedQuestions = useMemo(() => [...questions].sort((a, b) => a.number - b.number), [questions]);
   const maxQuestionNumber = sortedQuestions.length > 0 ? sortedQuestions[sortedQuestions.length - 1].number : 0;
@@ -518,6 +520,40 @@ export default function App() {
     []
   );
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function tryLoadDefaultDocx() {
+      setLoading(true);
+      setLoadError("");
+
+      try {
+        const response = await fetch(DEFAULT_DOCX_PATH, { cache: "no-store" });
+        if (!response.ok || cancelled) {
+          return;
+        }
+        const arrayBuffer = await response.arrayBuffer();
+        if (cancelled) {
+          return;
+        }
+        await loadDocxArrayBuffer(arrayBuffer, "default.docx");
+      } catch {
+        // Ignore missing or unreachable default file.
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+          dragDepthRef.current = 0;
+          setIsDragging(false);
+        }
+      }
+    }
+
+    tryLoadDefaultDocx();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   function resetRunState() {
     setCurrentIndex(0);
     setScore(0);
@@ -549,6 +585,36 @@ export default function App() {
     });
   }
 
+  async function loadDocxArrayBuffer(arrayBuffer, fileName) {
+    const result = await mammoth.convertToHtml(
+      { arrayBuffer },
+      {
+        convertImage: mammoth.images.imgElement(async (image) => {
+          const base64 = await image.read("base64");
+          return {
+            src: `data:${image.contentType};base64,${base64}`
+          };
+        })
+      }
+    );
+
+    const parsedQuestions = parseQuestionsFromHtml(result.value);
+    if (parsedQuestions.length === 0) {
+      throw new Error("未解析到题目，请确认题库格式与原 Python 版本一致。");
+    }
+
+    setQuestions(parsedQuestions);
+    setSourceFileName(fileName);
+    setSettings({
+      mode: "random",
+      numQuestions: Math.min(100, parsedQuestions.length),
+      startQuestion: 1
+    });
+    setShowSettings(true);
+    setQuizQuestions([]);
+    resetRunState();
+  }
+
   async function loadDocxFile(file) {
     setLoading(true);
     setLoadError("");
@@ -559,33 +625,7 @@ export default function App() {
       }
 
       const arrayBuffer = await file.arrayBuffer();
-      const result = await mammoth.convertToHtml(
-        { arrayBuffer },
-        {
-          convertImage: mammoth.images.imgElement(async (image) => {
-            const base64 = await image.read("base64");
-            return {
-              src: `data:${image.contentType};base64,${base64}`
-            };
-          })
-        }
-      );
-
-      const parsedQuestions = parseQuestionsFromHtml(result.value);
-      if (parsedQuestions.length === 0) {
-        throw new Error("未解析到题目，请确认题库格式与原 Python 版本一致。");
-      }
-
-      setQuestions(parsedQuestions);
-      setSourceFileName(file.name);
-      setSettings({
-        mode: "random",
-        numQuestions: Math.min(100, parsedQuestions.length),
-        startQuestion: 1
-      });
-      setShowSettings(true);
-      setQuizQuestions([]);
-      resetRunState();
+      await loadDocxArrayBuffer(arrayBuffer, file.name);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "解析题库失败。");
     } finally {
@@ -593,6 +633,13 @@ export default function App() {
       dragDepthRef.current = 0;
       setIsDragging(false);
     }
+  }
+
+  function openFilePicker() {
+    if (loading) {
+      return;
+    }
+    fileInputRef.current?.click();
   }
 
   async function handleFileUpload(event) {
@@ -809,6 +856,9 @@ export default function App() {
           <button type="button" className="secondary" onClick={restartQuiz} disabled={questions.length === 0}>
             重新开始
           </button>
+          <button type="button" className="secondary" onClick={openFilePicker} disabled={loading}>
+            更换 DOCX
+          </button>
           <button type="button" className="secondary" onClick={() => setShowWrongModal(true)}>
             查看错题
           </button>
@@ -822,6 +872,7 @@ export default function App() {
       <section className="card loader-card">
         <h1>CCDE 题库练习 (React Web)</h1>
         <p>上传 `.docx` 题库后即可开始练习，支持 iPhone 和 Mac 浏览器。</p>
+        <input ref={fileInputRef} type="file" accept=".docx" onChange={handleFileUpload} disabled={loading} style={{ display: "none" }} />
         <div
           className={`upload-zone ${isDragging ? "dragging" : ""}`}
           onDragOver={handleDragOver}
@@ -829,10 +880,9 @@ export default function App() {
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
-          <label className="upload-btn">
-            <input type="file" accept=".docx" onChange={handleFileUpload} disabled={loading} />
+          <button type="button" className="upload-btn" onClick={openFilePicker} disabled={loading}>
             {loading ? "正在解析题库..." : "选择题库 DOCX"}
-          </label>
+          </button>
           <p className="drag-tip">或将 .docx 文件拖拽到这里</p>
         </div>
         {loadError ? <p className="error-text">{loadError}</p> : null}
