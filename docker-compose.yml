@@ -1,0 +1,9 @@
+services:
+  ccde-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ccde-web
+    ports:
+      - "8443:8443"
+    restart: unless-stopped
